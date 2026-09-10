@@ -1,5 +1,6 @@
 .env
 install.env
+SAS-migration/
 .env.*
 !.env.example
 .migration-state/

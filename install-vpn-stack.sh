@@ -26,10 +26,14 @@ usage() {
 Использование:
   sudo bash install-vpn-stack.sh --check [--env FILE]
   sudo bash install-vpn-stack.sh --install [--env FILE]
+  sudo bash install-vpn-stack.sh --prepare [--env FILE]
+  sudo bash install-vpn-stack.sh --finish [--env FILE]
 
 Опции:
   --check       Проверить ОС, DNS, порты и конфигурацию без изменений (по умолчанию).
   --install     Выполнить установку или привести существующую установку к конфигурации.
+  --prepare     Установить зависимости и HTTP-конфигурацию до переключения DNS.
+  --finish      Завершить подготовленную установку после переключения DNS.
   --env FILE    Файл настроек (по умолчанию install.env рядом со скриптом).
   --help        Показать справку.
 
@@ -148,6 +152,7 @@ port_check() {
 }
 
 preflight() {
+  local defer_dns=${1:-no}
   [[ $EUID == 0 ]] || die 'Запустите от root (sudo)'
   [[ -r /etc/os-release ]] || die 'Не найдена /etc/os-release'
   # shellcheck disable=SC1091
@@ -155,7 +160,7 @@ preflight() {
   [[ $ID == ubuntu || $ID == debian ]] || die 'Поддерживаются только Debian и Ubuntu'
   command -v apt-get >/dev/null || die 'Не найден apt-get'
   detect_public_ip
-  dns_check
+  [[ $defer_dns == yes ]] || dns_check
   command -v ss >/dev/null || log 'Пакет iproute2 будет установлен'
   command -v ss >/dev/null && port_check
   log "Preflight пройден: $ID ${VERSION_ID:-}, IP ${CFG[PUBLIC_IP]}"
@@ -561,6 +566,8 @@ main() {
     case $1 in
       --check) mode=check; shift;;
       --install) mode=install; shift;;
+      --prepare) mode=prepare; shift;;
+      --finish) mode=finish; shift;;
       --env) (($# >= 2)) || die '--env требует путь'; env_file=$2; shift 2;;
       --help|-h) usage; return 0;;
       *) die "Неизвестная опция: $1";;
@@ -569,13 +576,20 @@ main() {
   load_env "$env_file"
   set_defaults
   validate_config
-  preflight
-  [[ $mode == install ]] || { log 'Проверка завершена; изменений нет. Для установки добавьте --install.'; return; }
+  if [[ $mode == prepare ]]; then preflight yes; else preflight no; fi
+  [[ $mode != check ]] || { log 'Проверка завершена; изменений нет. Для установки добавьте --install.'; return; }
   backup_existing
   trap rollback_nginx_on_error ERR
   install_packages
   write_http_bootstrap
   configure_firewall
+  if [[ $mode == prepare ]]; then
+    install -d -m 700 /var/lib/vpn-stack
+    printf '%s\n' "${CFG[PANEL_DOMAIN]} ${CFG[SUB_DOMAIN]} ${CFG[PUBLIC_IP]}" > /var/lib/vpn-stack/prepared
+    trap - ERR
+    log 'Подготовительный этап завершён; HTTP challenge готов. Переключите DNS и запустите --finish.'
+    return
+  fi
   issue_certificate
   install_xui
   install_logging
