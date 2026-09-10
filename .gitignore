@@ -1,0 +1,7 @@
+.env
+install.env
+.env.*
+!.env.example
+.migration-state/
+regru-backups/
+regru-credentials.json
